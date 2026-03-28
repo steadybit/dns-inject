@@ -1,0 +1,4 @@
+dist/
+dns-inject
+.idea/
+ebpf/dnserrorinjection_bpf*
