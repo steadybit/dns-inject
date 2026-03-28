@@ -1,0 +1,41 @@
+project_name: dns-inject
+version: 2
+
+before:
+  hooks:
+    - "env GOOS={{ .Runtime.Goos }} go generate ./ebpf/..."
+
+builds:
+  - binary: dns-inject
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+
+archives:
+  - formats: ["tar.gz"]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Arch }}"
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-{{ .Timestamp }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^build:'
+
+release:
+  prerelease: "false"
