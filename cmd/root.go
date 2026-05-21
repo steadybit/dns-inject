@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/steadybit/dns-inject/loader"
+	"golang.org/x/net/idna"
 )
 
 type rootOpts struct {
@@ -24,6 +25,7 @@ type rootOpts struct {
 	cidrs           []string
 	portRange       string
 	interfaces      []string
+	hostnames       []string
 	metricsInterval time.Duration
 }
 
@@ -41,6 +43,7 @@ func NewRootCmd(version string) *cobra.Command {
 	cmd.Flags().StringSliceVarP(&opts.cidrs, "cidr", "c", nil, "target IP CIDR to match, can be repeated (default: 0.0.0.0/0)")
 	cmd.Flags().StringVarP(&opts.portRange, "port", "p", "53", "DNS port or port range to intercept (e.g. 53 or 1-65535)")
 	cmd.Flags().StringSliceVarP(&opts.interfaces, "interface", "i", nil, "network interface to attach to, can be repeated (default: all non-loopback)")
+	cmd.Flags().StringSliceVarP(&opts.hostnames, "hostname", "n", nil, "target DNS hostname to match (exact, case-insensitive), can be repeated (default: match all)")
 	cmd.Flags().DurationVarP(&opts.metricsInterval, "metrics-interval", "m", 10*time.Second, "metrics output interval")
 
 	_ = cmd.MarkFlagRequired("error-type")
@@ -55,6 +58,15 @@ func (opts *rootOpts) run(cmd *cobra.Command, args []string) error {
 		if !loader.IsValidErrorType(t) {
 			return fmt.Errorf("invalid error type %q, valid: NXDOMAIN, SERVFAIL, TIMEOUT", t)
 		}
+	}
+
+	normalizedHostnames := make([]string, 0, len(opts.hostnames))
+	for _, h := range opts.hostnames {
+		n, err := normalizeHostname(h)
+		if err != nil {
+			return err
+		}
+		normalizedHostnames = append(normalizedHostnames, n)
 	}
 
 	if len(opts.cidrs) == 0 {
@@ -81,6 +93,7 @@ func (opts *rootOpts) run(cmd *cobra.Command, args []string) error {
 		PortLower:  portLower,
 		PortUpper:  portUpper,
 		Interfaces: opts.interfaces,
+		Hostnames:  normalizedHostnames,
 	}
 
 	l := loader.New()
@@ -98,6 +111,7 @@ func (opts *rootOpts) run(cmd *cobra.Command, args []string) error {
 		Strs("cidrs", opts.cidrs).
 		Str("port_range", opts.portRange).
 		Strs("interfaces", opts.interfaces).
+		Strs("hostnames", normalizedHostnames).
 		Msg("dns-inject started")
 
 	stop := make(chan struct{})
@@ -166,4 +180,36 @@ func parsePortRange(s string) (uint16, uint16, error) {
 		return 0, 0, fmt.Errorf("invalid port %d: must be between 1 and 65535", port)
 	}
 	return uint16(port), uint16(port), nil
+}
+
+// normalizeHostname validates and normalizes a user-supplied hostname so
+// it can be matched against the wire-format qname seen by the BPF program.
+// It trims one trailing dot, converts Unicode/IDN to ASCII punycode via
+// idna.Lookup.ToASCII (which also rejects malformed/mixed-script input),
+// lowercases, and enforces RFC 1035 length limits.
+func normalizeHostname(s string) (string, error) {
+	s = strings.TrimSuffix(s, ".")
+	if s == "" {
+		return "", fmt.Errorf("empty hostname")
+	}
+
+	ascii, err := idna.Lookup.ToASCII(s)
+	if err != nil {
+		return "", fmt.Errorf("invalid hostname %q: %w", s, err)
+	}
+	ascii = strings.ToLower(ascii)
+
+	if len(ascii) > 253 {
+		return "", fmt.Errorf("hostname %q exceeds 253 chars", ascii)
+	}
+	for _, label := range strings.Split(ascii, ".") {
+		if len(label) == 0 {
+			return "", fmt.Errorf("invalid empty label in %q", ascii)
+		}
+		if len(label) > 63 {
+			return "", fmt.Errorf("invalid label %q in %q (over 63 chars)", label, ascii)
+		}
+	}
+
+	return ascii, nil
 }

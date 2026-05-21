@@ -210,22 +210,68 @@ func TestPortRangeDoesNotAffectOutsideRange(t *testing.T) {
 	dnsInject.stop(t)
 }
 
+func TestHostnameMatchInjectsOnlyTarget(t *testing.T) {
+	dnsInject.start(t, "--hostname", testDomain, "--error-type", "NXDOMAIN")
+
+	matched := dnsInject.dig4(t, testDomain, dns1.atIPv4())
+	assert.Contains(t, matched.output, "NXDOMAIN", "configured hostname should be injected")
+
+	other := dnsInject.dig4(t, otherTestDomain, dns1.atIPv4())
+	assert.Equal(t, 0, other.exitCode, "non-matching hostname should resolve normally")
+	assert.Contains(t, other.output, "ANSWER SECTION")
+
+	dnsInject.stop(t)
+}
+
+func TestHostnameSubdomainDoesNotMatch(t *testing.T) {
+	dnsInject.start(t, "--hostname", "example.com", "--error-type", "NXDOMAIN")
+
+	result := dnsInject.dig4(t, testDomain, dns1.atIPv4())
+	assert.Equal(t, 0, result.exitCode, "subdomain should not match exact hostname filter")
+	assert.Contains(t, result.output, "ANSWER SECTION")
+
+	dnsInject.stop(t)
+}
+
+func TestHostnameCaseInsensitive(t *testing.T) {
+	dnsInject.start(t, "--hostname", "TEST.EXAMPLE.COM", "--error-type", "NXDOMAIN")
+
+	result := dnsInject.dig4(t, testDomain, dns1.atIPv4())
+	assert.Contains(t, result.output, "NXDOMAIN", "case-insensitive hostname match should still inject")
+
+	dnsInject.stop(t)
+}
+
+func TestMultipleHostnamesMatch(t *testing.T) {
+	dnsInject.start(t, "--hostname", testDomain, "--hostname", otherTestDomain, "--error-type", "SERVFAIL")
+
+	first := dnsInject.dig4(t, testDomain, dns1.atIPv4())
+	assert.Contains(t, first.output, "SERVFAIL")
+
+	second := dnsInject.dig4(t, otherTestDomain, dns1.atIPv4())
+	assert.Contains(t, second.output, "SERVFAIL")
+
+	dnsInject.stop(t)
+}
+
 // test environment
 
 const (
-	binaryPath    = "../dns-inject"
-	testDomain    = "test.example.com"
-	ipv4Subnet    = "172.30.0.0/16"
-	ipv6Subnet    = "fd00:db8::/64"
-	dns1IPv4      = "172.30.0.10"
-	dns1IPv6      = "fd00:db8::10"
-	dns2IPv4      = "172.30.0.11"
-	dns2IPv6      = "fd00:db8::11"
-	injectIPv4    = "172.30.0.100"
-	injectIPv6    = "fd00:db8::100"
-	corefile      = `. {
+	binaryPath      = "../dns-inject"
+	testDomain      = "test.example.com"
+	otherTestDomain = "other.example.com"
+	ipv4Subnet      = "172.30.0.0/16"
+	ipv6Subnet      = "fd00:db8::/64"
+	dns1IPv4        = "172.30.0.10"
+	dns1IPv6        = "fd00:db8::10"
+	dns2IPv4        = "172.30.0.11"
+	dns2IPv6        = "fd00:db8::11"
+	injectIPv4      = "172.30.0.100"
+	injectIPv6      = "fd00:db8::100"
+	corefile        = `. {
     hosts {
         1.2.3.4 test.example.com
+        5.6.7.8 other.example.com
         fallthrough
     }
     forward . 8.8.8.8
@@ -239,8 +285,8 @@ type dnsServer struct {
 	ipv6      string
 }
 
-func (d *dnsServer) atIPv4() string  { return "@" + d.ipv4 }
-func (d *dnsServer) atIPv6() string  { return "@" + d.ipv6 }
+func (d *dnsServer) atIPv4() string   { return "@" + d.ipv4 }
+func (d *dnsServer) atIPv6() string   { return "@" + d.ipv6 }
 func (d *dnsServer) cidrIPv4() string { return d.ipv4 + "/32" }
 func (d *dnsServer) cidrIPv6() string { return d.ipv6 + "/128" }
 
