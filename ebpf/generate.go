@@ -3,4 +3,4 @@
 
 package ebpf
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -tags linux -type metrics_value -type config_value -type config_flags DnsErrorInjection dns_error_injection.c -- -I. -Iheaders
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -tags linux -type metrics_value -type config_value -type config_flags -type hostname_key DnsErrorInjection dns_error_injection.c -- -I. -Iheaders
