@@ -17,7 +17,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/steadybit/dns-inject/loader"
-	"golang.org/x/net/idna"
 )
 
 type rootOpts struct {
@@ -62,7 +61,7 @@ func (opts *rootOpts) run(cmd *cobra.Command, args []string) error {
 
 	normalizedHostnames := make([]string, 0, len(opts.hostnames))
 	for _, h := range opts.hostnames {
-		n, err := normalizeHostname(h)
+		n, err := loader.NormalizeHostname(h)
 		if err != nil {
 			return err
 		}
@@ -180,46 +179,4 @@ func parsePortRange(s string) (uint16, uint16, error) {
 		return 0, 0, fmt.Errorf("invalid port %d: must be between 1 and 65535", port)
 	}
 	return uint16(port), uint16(port), nil
-}
-
-// hostnameIDNAProfile is a permissive IDNA profile: it maps Unicode to
-// ASCII (punycode) for IDN labels but does not reject DNS-valid characters
-// like underscores, which appear in SRV (`_sip._tcp.…`), DKIM/DMARC
-// (`_dmarc.example.com`), and Kubernetes service-discovery names. Per-label
-// length and emptiness are enforced below.
-var hostnameIDNAProfile = idna.New(
-	idna.MapForLookup(),
-	idna.Transitional(true),
-	idna.ValidateLabels(false),
-)
-
-// normalizeHostname validates and normalizes a user-supplied hostname so
-// it can be matched against the wire-format qname seen by the BPF program.
-// It trims one trailing dot, converts Unicode/IDN to ASCII punycode,
-// lowercases, and enforces RFC 1035 length limits.
-func normalizeHostname(s string) (string, error) {
-	s = strings.TrimSuffix(s, ".")
-	if s == "" {
-		return "", fmt.Errorf("empty hostname")
-	}
-
-	ascii, err := hostnameIDNAProfile.ToASCII(s)
-	if err != nil {
-		return "", fmt.Errorf("invalid hostname %q: %w", s, err)
-	}
-	ascii = strings.ToLower(ascii)
-
-	if len(ascii) > 253 {
-		return "", fmt.Errorf("hostname %q exceeds 253 chars", ascii)
-	}
-	for _, label := range strings.Split(ascii, ".") {
-		if len(label) == 0 {
-			return "", fmt.Errorf("invalid empty label in %q", ascii)
-		}
-		if len(label) > 63 {
-			return "", fmt.Errorf("invalid label %q in %q (over 63 chars)", label, ascii)
-		}
-	}
-
-	return ascii, nil
 }
