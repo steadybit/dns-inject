@@ -181,8 +181,8 @@ static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_off
 	// Bounded linear copy. The verifier rejects nested loops with
 	// packet-derived bounds, so we read up to HOSTNAME_KEY_SIZE bytes
 	// (the wire-format qname max) into a stack buffer, lowercasing as we
-	// go, and stop at the first zero-length label.
-	#pragma unroll
+	// go, and stop at the first zero-length label. The 6.6+ verifier
+	// handles this bounded loop without an unroll pragma.
 	for (int i = 0; i < HOSTNAME_KEY_SIZE; i++) {
 		__u8 b;
 		if (bpf_skb_load_bytes(skb, off + i, &b, 1) < 0) {
