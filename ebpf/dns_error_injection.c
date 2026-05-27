@@ -168,10 +168,9 @@ static __always_inline int is_dns_query(struct hdr_cursor *hc)
 	return (flags & 0x8000) == 0; // QR bit is 0 for queries
 }
 
-static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_offset)
+static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_offset, struct config_value *cfg)
 {
-	struct config_value *cfg = get_config();
-	if (!cfg || !cfg->hostname_filter_enabled) {
+	if (!cfg->hostname_filter_enabled) {
 		return 1;
 	}
 
@@ -387,7 +386,7 @@ static __always_inline int process_ipv4(struct __sk_buff *skb, struct hdr_cursor
 	}
 
 	__u32 dns_offset = udp_offset + sizeof(struct udphdr);
-	if (!hostname_matches(skb, dns_offset)) {
+	if (!hostname_matches(skb, dns_offset, cfg)) {
 		if (mv) {
 			__sync_fetch_and_add(&mv->hostname_filtered, 1);
 		}
@@ -452,7 +451,7 @@ static __always_inline int process_ipv6(struct __sk_buff *skb, struct hdr_cursor
 	}
 
 	__u32 dns_offset = udp_offset + sizeof(struct udphdr);
-	if (!hostname_matches(skb, dns_offset)) {
+	if (!hostname_matches(skb, dns_offset, cfg)) {
 		if (mv) {
 			__sync_fetch_and_add(&mv->hostname_filtered, 1);
 		}
