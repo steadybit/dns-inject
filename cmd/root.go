@@ -43,7 +43,7 @@ func NewRootCmd(version string) *cobra.Command {
 	cmd.Flags().StringSliceVarP(&opts.cidrs, "cidr", "c", nil, "target IP CIDR to match, can be repeated (default: 0.0.0.0/0)")
 	cmd.Flags().StringVarP(&opts.portRange, "port", "p", "53", "DNS port or port range to intercept (e.g. 53 or 1-65535)")
 	cmd.Flags().StringSliceVarP(&opts.interfaces, "interface", "i", nil, "network interface to attach to, can be repeated (default: all non-loopback)")
-	cmd.Flags().StringSliceVarP(&opts.hostnames, "hostname", "n", nil, "target DNS hostname to match (exact, case-insensitive), can be repeated (default: match all)")
+	cmd.Flags().StringSliceVarP(&opts.hostnames, "hostname", "n", nil, "target DNS hostname to match (exact, case-insensitive; underscores/IDN allowed), can be repeated (default: match all)")
 	cmd.Flags().DurationVarP(&opts.metricsInterval, "metrics-interval", "m", 10*time.Second, "metrics output interval")
 
 	_ = cmd.MarkFlagRequired("error-type")
@@ -182,10 +182,20 @@ func parsePortRange(s string) (uint16, uint16, error) {
 	return uint16(port), uint16(port), nil
 }
 
+// hostnameIDNAProfile is a permissive IDNA profile: it maps Unicode to
+// ASCII (punycode) for IDN labels but does not reject DNS-valid characters
+// like underscores, which appear in SRV (`_sip._tcp.…`), DKIM/DMARC
+// (`_dmarc.example.com`), and Kubernetes service-discovery names. Per-label
+// length and emptiness are enforced below.
+var hostnameIDNAProfile = idna.New(
+	idna.MapForLookup(),
+	idna.Transitional(true),
+	idna.ValidateLabels(false),
+)
+
 // normalizeHostname validates and normalizes a user-supplied hostname so
 // it can be matched against the wire-format qname seen by the BPF program.
-// It trims one trailing dot, converts Unicode/IDN to ASCII punycode via
-// idna.Lookup.ToASCII (which also rejects malformed/mixed-script input),
+// It trims one trailing dot, converts Unicode/IDN to ASCII punycode,
 // lowercases, and enforces RFC 1035 length limits.
 func normalizeHostname(s string) (string, error) {
 	s = strings.TrimSuffix(s, ".")
@@ -193,7 +203,7 @@ func normalizeHostname(s string) (string, error) {
 		return "", fmt.Errorf("empty hostname")
 	}
 
-	ascii, err := idna.Lookup.ToASCII(s)
+	ascii, err := hostnameIDNAProfile.ToASCII(s)
 	if err != nil {
 		return "", fmt.Errorf("invalid hostname %q: %w", s, err)
 	}
