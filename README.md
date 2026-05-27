@@ -115,6 +115,12 @@ dns-inject writes one JSON line per metrics interval to stdout:
 | `injected_servfail`| SERVFAIL responses injected              |
 | `injected_timeout` | Packets dropped to simulate timeout      |
 
+`hostname_filtered` is a subset of `dns_matched`: the hostname check runs
+*after* CIDR/port matching, so the relationship is
+`dns_matched ≥ hostname_filtered + injected`. Only the first qname in the
+question section is matched; DNS name compression in queries (rare in
+practice) is not followed.
+
 ## License
 
 MIT - see [LICENSE](LICENSE).
