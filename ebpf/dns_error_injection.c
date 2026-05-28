@@ -170,32 +170,39 @@ static __always_inline int is_dns_query(struct hdr_cursor *hc)
 	return (flags & 0x8000) == 0; // QR bit is 0 for queries
 }
 
-static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_offset, struct config_value *cfg)
+// hostname_matches scans the qname directly from packet memory and looks
+// it up in hostname_map. Marked __noinline so it is verified as its own
+// BPF subprog with an independent 1M-insn complexity budget; inlined
+// into egress_prog_func / ingress_prog_func the 255-iteration loop's
+// branches multiply against everything else and blow the parent's
+// budget. PTR_TO_PACKET + per-iteration bound check pattern from
+// https://github.com/zebaz/xpress-dns/blob/master/src/xdp_dns_kern.c
+__noinline static int hostname_matches(struct __sk_buff *skb, __u32 dns_offset)
 {
-	if (!cfg->hostname_filter_enabled) {
-		return 1;
+	__u32 qname_off = dns_offset + sizeof(struct dns_header);
+	if (bpf_skb_pull_data(skb, qname_off + 1) < 0) {
+		return 0;
 	}
 
+	__u8 *cursor = (__u8 *)(long)skb->data + qname_off;
+	__u8 *end = (__u8 *)(long)skb->data_end;
 	struct hostname_key key = {};
-	__u32 off = dns_offset + sizeof(struct dns_header);
 
-	// Per-byte read. A bulk-load + bpf_loop alternative kept tripping
-	// the verifier; keep this simple until perf is revisited.
 	for (int i = 0; i < HOSTNAME_KEY_SIZE; i++) {
-		__u8 b;
-		if (bpf_skb_load_bytes(skb, off + i, &b, 1) < 0) {
+		if (cursor + 1 > end) {
 			return 0;
 		}
-		if (b >= 'A' && b <= 'Z') {
-			b += 32;
+		__u8 c = *cursor;
+		cursor++;
+		if (c == 0) {
+			return bpf_map_lookup_elem(&hostname_map, &key) != NULL;
 		}
-		key.qname[i] = b;
-		if (b == 0) {
-			break;
+		if (c >= 'A' && c <= 'Z') {
+			c |= 0x20;
 		}
+		key.qname[i] = c;
 	}
-
-	return bpf_map_lookup_elem(&hostname_map, &key) != NULL;
+	return 0;
 }
 
 static __always_inline int inject_dns_error(struct __sk_buff *skb, __u32 eth_offset, __u32 ip_offset, __u32 udp_offset,
@@ -389,7 +396,7 @@ static __always_inline int process_ipv4(struct __sk_buff *skb, struct hdr_cursor
 	}
 
 	__u32 dns_offset = udp_offset + sizeof(struct udphdr);
-	if (!hostname_matches(skb, dns_offset, cfg)) {
+	if (cfg->hostname_filter_enabled && !hostname_matches(skb, dns_offset)) {
 		if (mv) {
 			__sync_fetch_and_add(&mv->hostname_filtered, 1);
 		}
@@ -454,7 +461,7 @@ static __always_inline int process_ipv6(struct __sk_buff *skb, struct hdr_cursor
 	}
 
 	__u32 dns_offset = udp_offset + sizeof(struct udphdr);
-	if (!hostname_matches(skb, dns_offset, cfg)) {
+	if (cfg->hostname_filter_enabled && !hostname_matches(skb, dns_offset)) {
 		if (mv) {
 			__sync_fetch_and_add(&mv->hostname_filtered, 1);
 		}
