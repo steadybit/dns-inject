@@ -110,18 +110,6 @@ struct {
 	__type(value, __u8);
 } hostname_map SEC(".maps");
 
-// Per-CPU scratch buffer for building the qname key. Lives off-stack so
-// the bpf_loop callback can do variable-offset writes through a pointer
-// to it; the verifier disallows that on caller-stack memory regardless
-// of bounds. Per-CPU is safe because BPF programs aren't preempted on a
-// single CPU mid-execution.
-struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-	__uint(max_entries, 1);
-	__type(key, __u32);
-	__type(value, struct hostname_key);
-} hostname_scratch_map SEC(".maps");
-
 
 static __always_inline struct config_value *get_config()
 {
@@ -182,80 +170,35 @@ static __always_inline int is_dns_query(struct hdr_cursor *hc)
 	return (flags & 0x8000) == 0; // QR bit is 0 for queries
 }
 
-// Per-byte callback for bpf_loop. State is carried in the context so the
-// verifier can analyse the callback body once instead of fanning it out
-// across all 255 iterations (which previously blew the 1M-insn complexity
-// limit when inlined into egress_prog_func / ingress_prog_func).
-struct hostname_scan_ctx {
-	struct hostname_key *key;
-	__u32 avail;
-	int term;
-};
-
-// barrier_var prevents clang from optimising across the variable, so the
-// static range proven by the cmp below survives into the array index used
-// for the map-value writes. Without it the verifier rejects the write with
-// "R3 unbounded memory access" because the bound register has been clobbered.
-#define barrier_var(var) asm volatile("" : "+r"(var))
-
-static long hostname_step(__u32 i, struct hostname_scan_ctx *ctx)
-{
-	if (i >= ctx->avail) {
-		return 1;
-	}
-	if (ctx->term >= 0) {
-		if (i >= HOSTNAME_KEY_SIZE) {
-			return 1;
-		}
-		barrier_var(i);
-		ctx->key->qname[i] = 0;
-		return 0;
-	}
-	if (i >= HOSTNAME_KEY_SIZE) {
-		return 1;
-	}
-	barrier_var(i);
-	__u8 b = ctx->key->qname[i];
-	if (b == 0) {
-		ctx->term = i;
-		return 0;
-	}
-	if (b >= 'A' && b <= 'Z') {
-		barrier_var(i);
-		ctx->key->qname[i] = b + 32;
-	}
-	return 0;
-}
-
 static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_offset, struct config_value *cfg)
 {
 	if (!cfg->hostname_filter_enabled) {
 		return 1;
 	}
 
-	__u32 zero = 0;
-	struct hostname_key *key = bpf_map_lookup_elem(&hostname_scratch_map, &zero);
-	if (!key) {
-		return 0;
-	}
-	__builtin_memset(key, 0, sizeof(*key));
-
+	struct hostname_key key = {};
 	__u32 off = dns_offset + sizeof(struct dns_header);
-	__u32 avail = skb->len > off ? skb->len - off : 0;
-	if (avail > HOSTNAME_KEY_SIZE) {
-		avail = HOSTNAME_KEY_SIZE;
-	}
-	if (avail == 0 || bpf_skb_load_bytes(skb, off, key->qname, avail) < 0) {
-		return 0;
+
+	// Per-byte read. The bulk-load + bpf_loop alternative ran into a
+	// chain of verifier issues (path explosion when inlined, variable-
+	// offset stack writes, then unbounded map-value writes even with
+	// barrier_var). The simple loop verifies cleanly; perf can be
+	// revisited as a separate change.
+	for (int i = 0; i < HOSTNAME_KEY_SIZE; i++) {
+		__u8 b;
+		if (bpf_skb_load_bytes(skb, off + i, &b, 1) < 0) {
+			return 0;
+		}
+		if (b >= 'A' && b <= 'Z') {
+			b += 32;
+		}
+		key.qname[i] = b;
+		if (b == 0) {
+			break;
+		}
 	}
 
-	struct hostname_scan_ctx ctx = { .key = key, .avail = avail, .term = -1 };
-	bpf_loop(HOSTNAME_KEY_SIZE, hostname_step, &ctx, 0);
-	if (ctx.term < 0) {
-		return 0;
-	}
-
-	return bpf_map_lookup_elem(&hostname_map, key) != NULL;
+	return bpf_map_lookup_elem(&hostname_map, &key) != NULL;
 }
 
 static __always_inline int inject_dns_error(struct __sk_buff *skb, __u32 eth_offset, __u32 ip_offset, __u32 udp_offset,
