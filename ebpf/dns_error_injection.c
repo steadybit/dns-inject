@@ -110,6 +110,18 @@ struct {
 	__type(value, __u8);
 } hostname_map SEC(".maps");
 
+// Per-CPU scratch buffer for building the qname key. Lives off-stack so
+// the bpf_loop callback can do variable-offset writes through a pointer
+// to it; the verifier disallows that on caller-stack memory regardless
+// of bounds. Per-CPU is safe because BPF programs aren't preempted on a
+// single CPU mid-execution.
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct hostname_key);
+} hostname_scratch_map SEC(".maps");
+
 
 static __always_inline struct config_value *get_config()
 {
@@ -212,24 +224,29 @@ static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_off
 		return 1;
 	}
 
-	struct hostname_key key = {};
-	__u32 off = dns_offset + sizeof(struct dns_header);
+	__u32 zero = 0;
+	struct hostname_key *key = bpf_map_lookup_elem(&hostname_scratch_map, &zero);
+	if (!key) {
+		return 0;
+	}
+	__builtin_memset(key, 0, sizeof(*key));
 
+	__u32 off = dns_offset + sizeof(struct dns_header);
 	__u32 avail = skb->len > off ? skb->len - off : 0;
 	if (avail > HOSTNAME_KEY_SIZE) {
 		avail = HOSTNAME_KEY_SIZE;
 	}
-	if (avail == 0 || bpf_skb_load_bytes(skb, off, key.qname, avail) < 0) {
+	if (avail == 0 || bpf_skb_load_bytes(skb, off, key->qname, avail) < 0) {
 		return 0;
 	}
 
-	struct hostname_scan_ctx ctx = { .key = &key, .avail = avail, .term = -1 };
+	struct hostname_scan_ctx ctx = { .key = key, .avail = avail, .term = -1 };
 	bpf_loop(HOSTNAME_KEY_SIZE, hostname_step, &ctx, 0);
 	if (ctx.term < 0) {
 		return 0;
 	}
 
-	return bpf_map_lookup_elem(&hostname_map, &key) != NULL;
+	return bpf_map_lookup_elem(&hostname_map, key) != NULL;
 }
 
 static __always_inline int inject_dns_error(struct __sk_buff *skb, __u32 eth_offset, __u32 ip_offset, __u32 udp_offset,
