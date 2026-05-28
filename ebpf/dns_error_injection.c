@@ -33,6 +33,8 @@ struct config_value {
 
 // Wire-format DNS qname, zero-padded. RFC 1035 §3.1 caps a domain name at
 // 255 bytes including length octets and the terminating zero-length label.
+// The byte layout here is the BPF map key; it must match loader.encodeWireName
+// (loader/hostname.go) exactly. Changes on either side require both.
 #define HOSTNAME_KEY_SIZE 255
 struct hostname_key {
 	__u8 qname[HOSTNAME_KEY_SIZE];

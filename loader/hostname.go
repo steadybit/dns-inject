@@ -63,6 +63,10 @@ func NormalizeHostname(s string) (string, error) {
 // 255-byte buffer, matching the layout the BPF program reads from packets.
 // Label/length validation is the caller's responsibility (NormalizeHostname);
 // this function returns an error only if the wire form would overflow.
+//
+// The byte layout is the BPF map key; it must stay in sync with
+// struct hostname_key / hostname_matches in ebpf/dns_error_injection.c.
+// Changes on either side require both.
 func encodeWireName(name string) ([hostnameKeySize]byte, error) {
 	var key [hostnameKeySize]byte
 	pos := 0
