@@ -179,11 +179,8 @@ static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_off
 	struct hostname_key key = {};
 	__u32 off = dns_offset + sizeof(struct dns_header);
 
-	// Per-byte read. The bulk-load + bpf_loop alternative ran into a
-	// chain of verifier issues (path explosion when inlined, variable-
-	// offset stack writes, then unbounded map-value writes even with
-	// barrier_var). The simple loop verifies cleanly; perf can be
-	// revisited as a separate change.
+	// Per-byte read. A bulk-load + bpf_loop alternative kept tripping
+	// the verifier; keep this simple until perf is revisited.
 	for (int i = 0; i < HOSTNAME_KEY_SIZE; i++) {
 		__u8 b;
 		if (bpf_skb_load_bytes(skb, off + i, &b, 1) < 0) {
