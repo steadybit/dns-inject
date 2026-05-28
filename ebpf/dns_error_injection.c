@@ -179,38 +179,20 @@ static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_off
 	struct hostname_key key = {};
 	__u32 off = dns_offset + sizeof(struct dns_header);
 
-	__u32 avail = skb->len > off ? skb->len - off : 0;
-	if (avail > HOSTNAME_KEY_SIZE) {
-		avail = HOSTNAME_KEY_SIZE;
-	}
-	if (avail == 0 || bpf_skb_load_bytes(skb, off, key.qname, avail) < 0) {
-		return 0;
-	}
-
-	// Single pass: lowercase A-Z up to the terminator, then zero out the
-	// qtype/qclass bytes the bulk load wrote past it (the encoder pads with
-	// zeros, so the map key must too). Bytes from `avail` onward are
-	// already zero from the init.
-	int term = -1;
+	// Per-byte read. A bulk-load + bpf_loop alternative kept tripping
+	// the verifier; keep this simple until perf is revisited.
 	for (int i = 0; i < HOSTNAME_KEY_SIZE; i++) {
-		if (i >= avail) {
-			break;
-		}
-		if (term >= 0) {
-			key.qname[i] = 0;
-			continue;
-		}
-		__u8 b = key.qname[i];
-		if (b == 0) {
-			term = i;
-			continue;
+		__u8 b;
+		if (bpf_skb_load_bytes(skb, off + i, &b, 1) < 0) {
+			return 0;
 		}
 		if (b >= 'A' && b <= 'Z') {
-			key.qname[i] = b + 32;
+			b += 32;
 		}
-	}
-	if (term < 0) {
-		return 0;
+		key.qname[i] = b;
+		if (b == 0) {
+			break;
+		}
 	}
 
 	return bpf_map_lookup_elem(&hostname_map, &key) != NULL;
