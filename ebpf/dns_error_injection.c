@@ -177,19 +177,47 @@ static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_off
 	struct hostname_key key = {};
 	__u32 off = dns_offset + sizeof(struct dns_header);
 
-	// Bounded linear copy. The verifier rejects nested loops with
-	// packet-derived bounds, so we read up to HOSTNAME_KEY_SIZE bytes
-	// (the wire-format qname max) into a stack buffer, lowercasing as we
-	// go, and stop at the first zero-length label. The 6.6+ verifier
-	// handles this bounded loop without an unroll pragma.
+	// Bulk-load up to HOSTNAME_KEY_SIZE bytes of qname in a single helper
+	// call, then lowercase / find the terminator in registers. The mask
+	// gives the verifier a static upper bound on the load length.
+	__u32 avail = skb->len > off ? skb->len - off : 0;
+	if (avail > HOSTNAME_KEY_SIZE) {
+		avail = HOSTNAME_KEY_SIZE;
+	}
+	avail &= HOSTNAME_KEY_SIZE;
+	if (avail == 0 || bpf_skb_load_bytes(skb, off, key.qname, avail) < 0) {
+		return 0;
+	}
+
+	int term = -1;
 	for (int i = 0; i < HOSTNAME_KEY_SIZE; i++) {
-		__u8 b;
-		if (bpf_skb_load_bytes(skb, off + i, &b, 1) < 0) {
-			return 0;
+		if (i >= avail) {
+			break;
 		}
-		if (b >= 'A' && b <= 'Z') b += 32;
-		key.qname[i] = b;
-		if (b == 0) break;
+		__u8 b = key.qname[i];
+		if (b == 0) {
+			term = i;
+			break;
+		}
+		if (b >= 'A' && b <= 'Z') {
+			key.qname[i] = b + 32;
+		}
+	}
+	if (term < 0) {
+		return 0;
+	}
+
+	// The bulk load wrote packet bytes past the terminator (qtype/qclass);
+	// zero them so the key matches the zero-padded encoder output. Bytes
+	// from `avail` to HOSTNAME_KEY_SIZE-1 are already zero from the init.
+	for (int i = 0; i < HOSTNAME_KEY_SIZE; i++) {
+		if (i <= term) {
+			continue;
+		}
+		if (i >= avail) {
+			break;
+		}
+		key.qname[i] = 0;
 	}
 
 	return bpf_map_lookup_elem(&hostname_map, &key) != NULL;
