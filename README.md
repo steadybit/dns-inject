@@ -13,9 +13,9 @@ dns-inject [flags]
 
 Flags:
   -e, --error-type strings          DNS error type to inject (NXDOMAIN, SERVFAIL, TIMEOUT), can be repeated
-  -c, --cidr strings                Target IP CIDRs to match (default: 0.0.0.0/0)
+  -c, --cidr strings                Target IP CIDR to match, can be repeated (default: 0.0.0.0/0)
   -p, --port string                 DNS port or range to intercept, e.g. 53 or 1-65535 (default: 53)
-  -i, --interface strings           Network interface to attach to (default: all non-loopback)
+  -i, --interface strings           Network interface to attach to, can be repeated (default: all non-loopback)
   -n, --hostname strings            Target DNS hostname to match exactly (case-insensitive; underscores and IDN/Unicode names allowed, e.g. _dmarc.example.com or _sip._tcp.example.com), can be repeated
   -m, --metrics-interval duration   Metrics output interval (default: 10s)
   -h, --help                        Help
