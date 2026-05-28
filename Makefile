@@ -10,7 +10,7 @@ audit: generate
 	gofmt -l .
 	GOOS=linux go vet ./...
 	@if [ "$$(uname -s)" = "Linux" ]; then go run honnef.co/go/tools/cmd/staticcheck@latest ./...; fi
-	@if [ "$$(uname -s)" = "Linux" ]; then go test -race -vet=off -timeout 5m ./...; else	go test -race -vet=off -timeout 5m ./e2e/...; fi
+	@if [ "$$(uname -s)" = "Linux" ]; then go test -count=1 -race -vet=off -timeout 5m ./...; else	go test -count=1 -race -vet=off -timeout 5m ./e2e/...; fi
 	go mod verify
 
 ## tidy: format code and tidy modules
