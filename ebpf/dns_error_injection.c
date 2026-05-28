@@ -8,12 +8,6 @@
 
 #include "packet_parse.h"
 
-// bpf_loop (kernel 5.17+, BPF_FUNC_loop = 181) is missing from the vendored
-// bpf_helper_defs.h. Declare it locally so we can avoid the verifier
-// path-explosion that plain inline loops cause when inlined into the giant
-// egress/ingress programs.
-static long (*bpf_loop)(__u32 nr_loops, void *callback_fn, void *callback_ctx, __u64 flags) = (void *) 181;
-
 #ifndef BPF_F_NO_PREALLOC
 #define BPF_F_NO_PREALLOC 1
 #endif
@@ -188,6 +182,12 @@ struct hostname_scan_ctx {
 
 static long hostname_step(__u32 i, struct hostname_scan_ctx *ctx)
 {
+	// Static bound the verifier can prove locally; ctx->avail is a
+	// runtime value the verifier can't trace back to its HOSTNAME_KEY_SIZE
+	// clamp in hostname_matches, so writes below need this guard too.
+	if (i >= HOSTNAME_KEY_SIZE) {
+		return 1;
+	}
 	if (i >= ctx->avail) {
 		return 1;
 	}
