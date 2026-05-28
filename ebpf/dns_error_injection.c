@@ -8,6 +8,12 @@
 
 #include "packet_parse.h"
 
+// bpf_loop (kernel 5.17+, BPF_FUNC_loop = 181) is missing from the vendored
+// bpf_helper_defs.h. Declare it locally so we can avoid the verifier
+// path-explosion that plain inline loops cause when inlined into the giant
+// egress/ingress programs.
+static long (*bpf_loop)(__u32 nr_loops, void *callback_fn, void *callback_ctx, __u64 flags) = (void *) 181;
+
 #ifndef BPF_F_NO_PREALLOC
 #define BPF_F_NO_PREALLOC 1
 #endif
@@ -170,6 +176,36 @@ static __always_inline int is_dns_query(struct hdr_cursor *hc)
 	return (flags & 0x8000) == 0; // QR bit is 0 for queries
 }
 
+// Per-byte callback for bpf_loop. State is carried in the context so the
+// verifier can analyse the callback body once instead of fanning it out
+// across all 255 iterations (which previously blew the 1M-insn complexity
+// limit when inlined into egress_prog_func / ingress_prog_func).
+struct hostname_scan_ctx {
+	struct hostname_key *key;
+	__u32 avail;
+	int term;
+};
+
+static long hostname_step(__u32 i, struct hostname_scan_ctx *ctx)
+{
+	if (i >= ctx->avail) {
+		return 1;
+	}
+	if (ctx->term >= 0) {
+		ctx->key->qname[i] = 0;
+		return 0;
+	}
+	__u8 b = ctx->key->qname[i];
+	if (b == 0) {
+		ctx->term = i;
+		return 0;
+	}
+	if (b >= 'A' && b <= 'Z') {
+		ctx->key->qname[i] = b + 32;
+	}
+	return 0;
+}
+
 static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_offset, struct config_value *cfg)
 {
 	if (!cfg->hostname_filter_enabled) {
@@ -179,8 +215,6 @@ static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_off
 	struct hostname_key key = {};
 	__u32 off = dns_offset + sizeof(struct dns_header);
 
-	// Bulk-load up to HOSTNAME_KEY_SIZE bytes of qname in a single helper
-	// call, then lowercase / find the terminator in registers.
 	__u32 avail = skb->len > off ? skb->len - off : 0;
 	if (avail > HOSTNAME_KEY_SIZE) {
 		avail = HOSTNAME_KEY_SIZE;
@@ -189,35 +223,10 @@ static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_off
 		return 0;
 	}
 
-	int term = -1;
-	for (int i = 0; i < HOSTNAME_KEY_SIZE; i++) {
-		if (i >= avail) {
-			break;
-		}
-		__u8 b = key.qname[i];
-		if (b == 0) {
-			term = i;
-			break;
-		}
-		if (b >= 'A' && b <= 'Z') {
-			key.qname[i] = b + 32;
-		}
-	}
-	if (term < 0) {
+	struct hostname_scan_ctx ctx = { .key = &key, .avail = avail, .term = -1 };
+	bpf_loop(HOSTNAME_KEY_SIZE, hostname_step, &ctx, 0);
+	if (ctx.term < 0) {
 		return 0;
-	}
-
-	// The bulk load wrote packet bytes past the terminator (qtype/qclass);
-	// zero them so the key matches the zero-padded encoder output. Bytes
-	// from `avail` to HOSTNAME_KEY_SIZE-1 are already zero from the init.
-	for (int i = 0; i < HOSTNAME_KEY_SIZE; i++) {
-		if (i <= term) {
-			continue;
-		}
-		if (i >= avail) {
-			break;
-		}
-		key.qname[i] = 0;
 	}
 
 	return bpf_map_lookup_elem(&hostname_map, &key) != NULL;
