@@ -179,6 +179,8 @@ static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_off
 	struct hostname_key key = {};
 	__u32 off = dns_offset + sizeof(struct dns_header);
 
+	// Bulk-load up to HOSTNAME_KEY_SIZE bytes of qname in a single helper
+	// call, then lowercase / find the terminator in registers.
 	__u32 avail = skb->len > off ? skb->len - off : 0;
 	if (avail > HOSTNAME_KEY_SIZE) {
 		avail = HOSTNAME_KEY_SIZE;
@@ -187,23 +189,15 @@ static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_off
 		return 0;
 	}
 
-	// Single pass: lowercase A-Z up to the terminator, then zero out the
-	// qtype/qclass bytes the bulk load wrote past it (the encoder pads with
-	// zeros, so the map key must too). Bytes from `avail` onward are
-	// already zero from the init.
 	int term = -1;
 	for (int i = 0; i < HOSTNAME_KEY_SIZE; i++) {
 		if (i >= avail) {
 			break;
 		}
-		if (term >= 0) {
-			key.qname[i] = 0;
-			continue;
-		}
 		__u8 b = key.qname[i];
 		if (b == 0) {
 			term = i;
-			continue;
+			break;
 		}
 		if (b >= 'A' && b <= 'Z') {
 			key.qname[i] = b + 32;
@@ -211,6 +205,19 @@ static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_off
 	}
 	if (term < 0) {
 		return 0;
+	}
+
+	// The bulk load wrote packet bytes past the terminator (qtype/qclass);
+	// zero them so the key matches the zero-padded encoder output. Bytes
+	// from `avail` to HOSTNAME_KEY_SIZE-1 are already zero from the init.
+	for (int i = 0; i < HOSTNAME_KEY_SIZE; i++) {
+		if (i <= term) {
+			continue;
+		}
+		if (i >= avail) {
+			break;
+		}
+		key.qname[i] = 0;
 	}
 
 	return bpf_map_lookup_elem(&hostname_map, &key) != NULL;
