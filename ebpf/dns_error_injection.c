@@ -203,20 +203,25 @@ static long hostname_step(__u32 i, struct hostname_scan_ctx *ctx)
 	if (i >= ctx->avail) {
 		return 1;
 	}
+	if (ctx->term >= 0) {
+		if (i >= HOSTNAME_KEY_SIZE) {
+			return 1;
+		}
+		barrier_var(i);
+		ctx->key->qname[i] = 0;
+		return 0;
+	}
 	if (i >= HOSTNAME_KEY_SIZE) {
 		return 1;
 	}
 	barrier_var(i);
-	if (ctx->term >= 0) {
-		ctx->key->qname[i] = 0;
-		return 0;
-	}
 	__u8 b = ctx->key->qname[i];
 	if (b == 0) {
 		ctx->term = i;
 		return 0;
 	}
 	if (b >= 'A' && b <= 'Z') {
+		barrier_var(i);
 		ctx->key->qname[i] = b + 32;
 	}
 	return 0;
