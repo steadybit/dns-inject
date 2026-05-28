@@ -24,6 +24,7 @@ type rootOpts struct {
 	cidrs           []string
 	portRange       string
 	interfaces      []string
+	hostnames       []string
 	metricsInterval time.Duration
 }
 
@@ -41,6 +42,7 @@ func NewRootCmd(version string) *cobra.Command {
 	cmd.Flags().StringSliceVarP(&opts.cidrs, "cidr", "c", nil, "target IP CIDR to match, can be repeated (default: 0.0.0.0/0)")
 	cmd.Flags().StringVarP(&opts.portRange, "port", "p", "53", "DNS port or port range to intercept (e.g. 53 or 1-65535)")
 	cmd.Flags().StringSliceVarP(&opts.interfaces, "interface", "i", nil, "network interface to attach to, can be repeated (default: all non-loopback)")
+	cmd.Flags().StringSliceVarP(&opts.hostnames, "hostname", "n", nil, "target DNS hostname to match (exact, case-insensitive; underscores/IDN allowed), can be repeated (default: match all)")
 	cmd.Flags().DurationVarP(&opts.metricsInterval, "metrics-interval", "m", 10*time.Second, "metrics output interval")
 
 	_ = cmd.MarkFlagRequired("error-type")
@@ -55,6 +57,15 @@ func (opts *rootOpts) run(cmd *cobra.Command, args []string) error {
 		if !loader.IsValidErrorType(t) {
 			return fmt.Errorf("invalid error type %q, valid: NXDOMAIN, SERVFAIL, TIMEOUT", t)
 		}
+	}
+
+	normalizedHostnames := make([]string, 0, len(opts.hostnames))
+	for _, h := range opts.hostnames {
+		n, err := loader.NormalizeHostname(h)
+		if err != nil {
+			return err
+		}
+		normalizedHostnames = append(normalizedHostnames, n)
 	}
 
 	if len(opts.cidrs) == 0 {
@@ -81,6 +92,7 @@ func (opts *rootOpts) run(cmd *cobra.Command, args []string) error {
 		PortLower:  portLower,
 		PortUpper:  portUpper,
 		Interfaces: opts.interfaces,
+		Hostnames:  normalizedHostnames,
 	}
 
 	l := loader.New()
@@ -98,6 +110,7 @@ func (opts *rootOpts) run(cmd *cobra.Command, args []string) error {
 		Strs("cidrs", opts.cidrs).
 		Str("port_range", opts.portRange).
 		Strs("interfaces", opts.interfaces).
+		Strs("hostnames", normalizedHostnames).
 		Msg("dns-inject started")
 
 	stop := make(chan struct{})
