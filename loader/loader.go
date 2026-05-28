@@ -135,6 +135,25 @@ type lpmKey6 struct {
 func (l *Loader) configureCIDRMap(config Config) error {
 	log.Info().Int("cidr_count", len(config.CIDRs)).Msg("configuring CIDR maps")
 
+	var v4Count, v6Count int
+	for _, cidr := range config.CIDRs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return fmt.Errorf("invalid CIDR %q: %w", cidr, err)
+		}
+		if ipNet.IP.To4() != nil {
+			v4Count++
+		} else {
+			v6Count++
+		}
+	}
+	if capacity := int(l.objs.Ipv4CidrMap.MaxEntries()); v4Count > capacity {
+		return fmt.Errorf("too many IPv4 CIDRs: %d exceeds the maximum of %d", v4Count, capacity)
+	}
+	if capacity := int(l.objs.Ipv6CidrMap.MaxEntries()); v6Count > capacity {
+		return fmt.Errorf("too many IPv6 CIDRs: %d exceeds the maximum of %d", v6Count, capacity)
+	}
+
 	for _, cidr := range config.CIDRs {
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
@@ -166,6 +185,9 @@ func (l *Loader) configureCIDRMap(config Config) error {
 func (l *Loader) configureHostnameMap(config Config) error {
 	if len(config.Hostnames) == 0 {
 		return nil
+	}
+	if capacity := int(l.objs.HostnameMap.MaxEntries()); len(config.Hostnames) > capacity {
+		return fmt.Errorf("too many hostnames: %d exceeds the maximum of %d", len(config.Hostnames), capacity)
 	}
 	log.Info().Int("hostname_count", len(config.Hostnames)).Msg("configuring hostname map")
 
