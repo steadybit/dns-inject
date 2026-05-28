@@ -192,17 +192,21 @@ struct hostname_scan_ctx {
 	int term;
 };
 
+// barrier_var prevents clang from optimising across the variable, so the
+// static range proven by the cmp below survives into the array index used
+// for the map-value writes. Without it the verifier rejects the write with
+// "R3 unbounded memory access" because the bound register has been clobbered.
+#define barrier_var(var) asm volatile("" : "+r"(var))
+
 static long hostname_step(__u32 i, struct hostname_scan_ctx *ctx)
 {
-	// Static bound the verifier can prove locally; ctx->avail is a
-	// runtime value the verifier can't trace back to its HOSTNAME_KEY_SIZE
-	// clamp in hostname_matches, so writes below need this guard too.
-	if (i >= HOSTNAME_KEY_SIZE) {
-		return 1;
-	}
 	if (i >= ctx->avail) {
 		return 1;
 	}
+	if (i >= HOSTNAME_KEY_SIZE) {
+		return 1;
+	}
+	barrier_var(i);
 	if (ctx->term >= 0) {
 		ctx->key->qname[i] = 0;
 		return 0;
