@@ -178,13 +178,11 @@ static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_off
 	__u32 off = dns_offset + sizeof(struct dns_header);
 
 	// Bulk-load up to HOSTNAME_KEY_SIZE bytes of qname in a single helper
-	// call, then lowercase / find the terminator in registers. The mask
-	// gives the verifier a static upper bound on the load length.
+	// call, then lowercase / find the terminator in registers.
 	__u32 avail = skb->len > off ? skb->len - off : 0;
 	if (avail > HOSTNAME_KEY_SIZE) {
 		avail = HOSTNAME_KEY_SIZE;
 	}
-	avail &= HOSTNAME_KEY_SIZE;
 	if (avail == 0 || bpf_skb_load_bytes(skb, off, key.qname, avail) < 0) {
 		return 0;
 	}
