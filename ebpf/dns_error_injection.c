@@ -28,6 +28,14 @@ struct config_value {
 	enum config_flags flags;
 	__u16 port_lower;
 	__u16 port_upper;
+	__u8 hostname_filter_enabled;
+};
+
+// Wire-format DNS qname, zero-padded. RFC 1035 §3.1 caps a domain name at
+// 255 bytes including length octets and the terminating zero-length label.
+#define HOSTNAME_KEY_SIZE 255
+struct hostname_key {
+	__u8 qname[HOSTNAME_KEY_SIZE];
 };
 
 // DNS header structure
@@ -61,6 +69,7 @@ struct metrics_value {
 	__u64 injected_nxdomain;
 	__u64 injected_servfail;
 	__u64 injected_timeout;
+	__u64 hostname_filtered;
 };
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -91,6 +100,13 @@ struct {
 	__type(key, __u32);
 	__type(value, struct metrics_value);
 } metrics_map SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1024);
+	__type(key, struct hostname_key);
+	__type(value, __u8);
+} hostname_map SEC(".maps");
 
 
 static __always_inline struct config_value *get_config()
@@ -150,6 +166,33 @@ static __always_inline int is_dns_query(struct hdr_cursor *hc)
 	// Check if this is a DNS query (QR bit = 0)
 	__u16 flags = bpf_ntohs(dns->flags);
 	return (flags & 0x8000) == 0; // QR bit is 0 for queries
+}
+
+static __always_inline int hostname_matches(struct __sk_buff *skb, __u32 dns_offset, struct config_value *cfg)
+{
+	if (!cfg->hostname_filter_enabled) {
+		return 1;
+	}
+
+	struct hostname_key key = {};
+	__u32 off = dns_offset + sizeof(struct dns_header);
+
+	// Bounded linear copy. The verifier rejects nested loops with
+	// packet-derived bounds, so we read up to HOSTNAME_KEY_SIZE bytes
+	// (the wire-format qname max) into a stack buffer, lowercasing as we
+	// go, and stop at the first zero-length label. The 6.6+ verifier
+	// handles this bounded loop without an unroll pragma.
+	for (int i = 0; i < HOSTNAME_KEY_SIZE; i++) {
+		__u8 b;
+		if (bpf_skb_load_bytes(skb, off + i, &b, 1) < 0) {
+			return 0;
+		}
+		if (b >= 'A' && b <= 'Z') b += 32;
+		key.qname[i] = b;
+		if (b == 0) break;
+	}
+
+	return bpf_map_lookup_elem(&hostname_map, &key) != NULL;
 }
 
 static __always_inline int inject_dns_error(struct __sk_buff *skb, __u32 eth_offset, __u32 ip_offset, __u32 udp_offset,
@@ -342,6 +385,14 @@ static __always_inline int process_ipv4(struct __sk_buff *skb, struct hdr_cursor
 		__sync_fetch_and_add(&mv->dns_matched, 1);
 	}
 
+	__u32 dns_offset = udp_offset + sizeof(struct udphdr);
+	if (!hostname_matches(skb, dns_offset, cfg)) {
+		if (mv) {
+			__sync_fetch_and_add(&mv->hostname_filtered, 1);
+		}
+		return TC_ACT_OK;
+	}
+
 	int error_type = get_error_type(cfg->flags);
 	if (error_type == DNS_RCODE_NOERROR) {
 		return TC_ACT_OK;
@@ -397,6 +448,14 @@ static __always_inline int process_ipv6(struct __sk_buff *skb, struct hdr_cursor
 
 	if (mv) {
 		__sync_fetch_and_add(&mv->dns_matched, 1);
+	}
+
+	__u32 dns_offset = udp_offset + sizeof(struct udphdr);
+	if (!hostname_matches(skb, dns_offset, cfg)) {
+		if (mv) {
+			__sync_fetch_and_add(&mv->hostname_filtered, 1);
+		}
+		return TC_ACT_OK;
 	}
 
 	int error_type = get_error_type(cfg->flags);

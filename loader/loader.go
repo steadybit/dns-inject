@@ -35,6 +35,7 @@ type Config struct {
 	PortLower  uint16
 	PortUpper  uint16
 	Interfaces []string
+	Hostnames  []string
 }
 
 type Metrics struct {
@@ -42,6 +43,7 @@ type Metrics struct {
 	Ipv4             uint64 `json:"ipv4"`
 	Ipv6             uint64 `json:"ipv6"`
 	DnsMatched       uint64 `json:"dns_matched"`
+	HostnameFiltered uint64 `json:"hostname_filtered"`
 	Injected         uint64 `json:"injected"`
 	InjectedNxdomain uint64 `json:"injected_nxdomain"`
 	InjectedServfail uint64 `json:"injected_servfail"`
@@ -82,6 +84,9 @@ func (l *Loader) configureMaps(config Config) error {
 	if err := l.configureCIDRMap(config); err != nil {
 		return fmt.Errorf("configure CIDR maps: %w", err)
 	}
+	if err := l.configureHostnameMap(config); err != nil {
+		return fmt.Errorf("configure hostname map: %w", err)
+	}
 	return nil
 }
 
@@ -107,6 +112,9 @@ func (l *Loader) configureConfigMap(config Config) error {
 		Flags:     flags,
 		PortLower: config.PortLower,
 		PortUpper: config.PortUpper,
+	}
+	if len(config.Hostnames) > 0 {
+		cv.HostnameFilterEnabled = 1
 	}
 	if err := l.objs.ConfigMap.Put(uint32(0), &cv); err != nil {
 		return fmt.Errorf("set config: %w", err)
@@ -152,6 +160,27 @@ func (l *Loader) configureCIDRMap(config Config) error {
 		}
 	}
 
+	return nil
+}
+
+func (l *Loader) configureHostnameMap(config Config) error {
+	if len(config.Hostnames) == 0 {
+		return nil
+	}
+	log.Info().Int("hostname_count", len(config.Hostnames)).Msg("configuring hostname map")
+
+	for _, h := range config.Hostnames {
+		key, err := encodeWireName(h)
+		if err != nil {
+			return fmt.Errorf("encode hostname %q: %w", h, err)
+		}
+		var bpfKey bpf.DnsErrorInjectionHostnameKey
+		copy(bpfKey.Qname[:], key[:])
+		if err := l.objs.HostnameMap.Put(&bpfKey, uint8(1)); err != nil {
+			return fmt.Errorf("add hostname %q to map: %w", h, err)
+		}
+		log.Info().Str("hostname", h).Msg("added hostname filter")
+	}
 	return nil
 }
 
@@ -209,6 +238,7 @@ func (l *Loader) ReadMetrics() (*Metrics, error) {
 		Ipv4:             mv.Ipv4,
 		Ipv6:             mv.Ipv6,
 		DnsMatched:       mv.DnsMatched,
+		HostnameFiltered: mv.HostnameFiltered,
 		Injected:         mv.Injected,
 		InjectedNxdomain: mv.InjectedNxdomain,
 		InjectedServfail: mv.InjectedServfail,

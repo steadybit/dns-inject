@@ -16,6 +16,7 @@ Flags:
   -c, --cidr strings                Target IP CIDRs to match (default: 0.0.0.0/0)
   -p, --port string                 DNS port or range to intercept, e.g. 53 or 1-65535 (default: 53)
   -i, --interface strings           Network interface to attach to (default: all non-loopback)
+  -n, --hostname strings            Target DNS hostname to match exactly (case-insensitive; underscores and IDN/Unicode names allowed, e.g. _dmarc.example.com or _sip._tcp.example.com), can be repeated
   -m, --metrics-interval duration   Metrics output interval (default: 10s)
   -h, --help                        Help
   -v, --version                     Version
@@ -39,6 +40,12 @@ Simulate DNS timeouts on a custom DNS port:
 
 ```bash
 dns-inject -e TIMEOUT -p 5353
+```
+
+Inject NXDOMAIN only for `example.com`, leaving every other DNS query unchanged:
+
+```bash
+dns-inject -e NXDOMAIN --hostname example.com
 ```
 
 ## Requirements
@@ -93,7 +100,7 @@ Runs formatting checks, `go vet`, `staticcheck`, tests, and module verification.
 dns-inject writes one JSON line per metrics interval to stdout:
 
 ```json
-{"seen":1042,"ipv4":980,"ipv6":62,"dns_matched":15,"injected":12,"injected_nxdomain":8,"injected_servfail":4,"injected_timeout":0}
+{"seen":1042,"ipv4":980,"ipv6":62,"dns_matched":15,"hostname_filtered":3,"injected":12,"injected_nxdomain":8,"injected_servfail":4,"injected_timeout":0}
 ```
 
 | Field              | Description                              |
@@ -102,10 +109,17 @@ dns-inject writes one JSON line per metrics interval to stdout:
 | `ipv4`             | IPv4 packets                             |
 | `ipv6`             | IPv6 packets                             |
 | `dns_matched`      | DNS packets matching target CIDRs/ports  |
+| `hostname_filtered`| DNS queries skipped because the qname did not match `--hostname` |
 | `injected`         | Total error responses injected           |
 | `injected_nxdomain`| NXDOMAIN responses injected              |
 | `injected_servfail`| SERVFAIL responses injected              |
 | `injected_timeout` | Packets dropped to simulate timeout      |
+
+`hostname_filtered` is a subset of `dns_matched`: the hostname check runs
+*after* CIDR/port matching, so the relationship is
+`dns_matched ≥ hostname_filtered + injected`. Only the first qname in the
+question section is matched; DNS name compression in queries (rare in
+practice) is not followed.
 
 ## License
 
