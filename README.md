@@ -57,7 +57,7 @@ dns-inject -e NXDOMAIN --hostname example.com
 
 ### Prerequisites
 
-- Go 1.25+
+- Go 1.26+
 - [goreleaser](https://goreleaser.com/)
 - clang and llvm (for eBPF compilation)
 
