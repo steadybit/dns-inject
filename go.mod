@@ -1,6 +1,6 @@
 module github.com/steadybit/dns-inject
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/cilium/ebpf v0.22.0
