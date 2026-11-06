@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2026 Steadybit GmbH
+// Author: Tom Handal <thandal@roblox.com>
 
 #ifndef __PACKET_PARSE_H__
 #define __PACKET_PARSE_H__

@@ -2,6 +2,8 @@
 
 // SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2026 Steadybit GmbH
+// Author: Tom Handal <thandal@roblox.com>
+// Author: Johannes Edmeier <johannes.edmeier@steadybit.com>
 
 #include "common.h"
 #include "bpf_endian.h"
