@@ -121,6 +121,10 @@ dns-inject writes one JSON line per metrics interval to stdout:
 question section is matched; DNS name compression in queries (rare in
 practice) is not followed.
 
+## Credits
+
+The eBPF approach to DNS error injection in dns-inject goes back to work by [Tom Handal](https://github.com/tomh-rbx) (Roblox), who contributed the original eBPF-based DNS error injection for the Steadybit host and container extensions. The packet parsing and DNS error response rewriting in `ebpf/` build on his implementation.
+
 ## License
 
 MIT - see [LICENSE](LICENSE).
